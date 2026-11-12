@@ -39,17 +39,43 @@ variability rides on top of a truthful average.
 
 ## Features
 
-- 📋 **Clipboard-driven** — copy anywhere, type anywhere
+- 🎨 **Apple-style UI** — pill buttons, switches, segmented controls and a
+  live progress ring
+- 🌈 **8 themes** — Light, Dark, Midnight, Dracula, Ocean, Sakura, plus two
+  fun ones: **Matrix** (phosphor-green terminal, `auto_typer` wordmark) and
+  **Retro CRT** (amber 80s monitor). Switch from the Light/Dark toggle or
+  the gallery in **⚙ Settings** — applied instantly, remembered forever
+- ⚙️ **Settings panel** — theme gallery with live previews, **remappable
+  hotkeys** (click a chip → press a key; conflicts caught, defaults
+  restorable) and sound effects
+- 🎛️ **Remembered settings** — speed, typos, preset, hotkeys, theme and
+  window size/position all persist between launches
+- 🔁 **Repeat passes** — type the text up to 10× in one session (great for
+  burn-in tests or practice)
+- ⇄ **Shuffle** — randomize word order for a fresh practice text
+- ⏸️ **Persistent pause & resume** — progress is continuously saved to disk,
+  so you can quit the app mid-type and pick up exactly where you left off,
+  even days later (an "Unfinished session" card appears on launch)
+- 📚 **Snippet library** — save your texts with a name and reuse them
+  anytime, right from the menu
+- 📊 **Lifetime dashboard** — characters typed, typos fixed, sessions
+  finished, plus an activity sparkline of your last runs
+- ⚡ **Speed presets** — Chill / Balanced / Confident / Rapid, one click
+- 📈 **Live stats** — current WPM, ETA to completion, typo & fix counters
+- 🔔 **Sound effects** — a Glass chime on finish, Pop on stop (toggle in
+  Settings)
+- 📋 **Clipboard-driven** — copy anywhere, type anywhere; `⌘⏎` starts
+  typing straight from the text box
 - 🧬 **Human mode** — full variable-timing simulation, on by default
-- 🎚️ **Tunable** — speed (WPM), typo rate, auto-fix percentage, start delay
-- 🌍 **Global hotkeys** — `F8` start, `F10` pause/resume, `Esc` emergency stop,
-  all work from any app
-- ⏸️ **Pause & resume** — freeze mid-text, continue exactly where it stopped
+- 🎚️ **Tunable** — speed (WPM), typo rate, auto-fix percentage, start delay,
+  repeat count
+- 🌍 **Global hotkeys** — `F8` start, `F10` pause/resume, `Esc` emergency
+  stop by default, all work from any app, all remappable
 - 🔁 **Real self-correction** — typo → pause → backspace → correct key,
   every time (verified on real keystrokes)
-- 🖥️ **Clean dark GUI** — paste box, live progress bar, real-time WPM readout
 - 💻 **CLI too** — headless mode for scripting: `python3 autotyper.py --wpm 65`
-- 🚦 **Safe** — instant stop, tabs converted to spaces so focus never jumps
+- 🚦 **Safe** — instant stop, tabs converted to spaces so focus never jumps,
+  crash-safe atomic saves
 
 ## Quick start
 
@@ -75,17 +101,35 @@ needed, on Linux install `python3-tk` and an X server.
 3. Press **F8** → short countdown → it types everything out
 4. **Esc** stops instantly, **F9** reloads from the clipboard (CLI)
 
-In the GUI: paste into the box, tune the sliders, hit **▶ Start Typing**.
-**⏸ Pause** (or `F10`) freezes it mid-text; **▶ Resume** continues exactly
-where it stopped. Typos are always self-corrected — wrong key, short pause,
+In the GUI: paste into the box (or pick a snippet from **Library**), pick a
+preset or tune the sliders, hit **▶ Start Typing**. **⏸ Pause** (or `F10`)
+freezes it mid-text; **▶ Resume** continues exactly where it stopped — and
+because progress is saved to disk every couple of seconds, you can even
+**quit the app entirely** and resume from the "Unfinished session" card next
+time you open it. **Esc** stops instantly but keeps your progress: nothing is
+ever lost. Typos are always self-corrected — wrong key, short pause,
 backspace, correct key — like a person who notices and fixes their mistakes
 (lower the *Auto-fix* slider if you want a few to slip through).
+
+Set **Repeat** to ×N to type the text N times in one session — the progress
+ring and ETA account for all passes, and the counters keep accruing.
+
+**Hotkeys:** defaults are `F8` / `F10` / `Esc`, but you can remap any of them
+in **⚙ Settings** — click a key chip, press the new key, and it applies
+everywhere instantly (buttons, footer, and the global listener). If an
+F-key changes volume or brightness instead, enable "Use F1, F2 as standard
+function keys" in System Settings → Keyboard.
+
+Your data lives in `~/Library/Application Support/AutoTyper/`
+(`session.json`, `snippets.json`, `stats.json`, plus `prefs.json` for your
+theme, hotkeys, sliders and window size).
 
 ## Project layout
 
 ```
 auto_typer/
-├── autotyper_gui.py   # dark-themed Tkinter GUI + typing engine
+├── autotyper_gui.py   # Apple-style Tkinter GUI + typing engine
+├── persistence.py     # session save/resume, snippets, lifetime stats
 ├── autotyper.py       # CLI version (hotkeys: F8 / F9 / Esc)
 ├── human_mode.py      # the behavioral typing model (drift, phases, typos)
 ├── AutoTyper.command  # double-click launcher for macOS
