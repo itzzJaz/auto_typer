@@ -56,9 +56,16 @@ class TypingEngine(threading.Thread):
         self.human = human            # variable mode
         self.kb = Controller()
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
 
     def stop(self):
         self.stop_event.set()
+
+    def pause(self):
+        self.pause_event.set()
+
+    def resume(self):
+        self.pause_event.clear()
 
     def emit(self, kind, payload=None):
         self.events.put((kind, payload))
@@ -70,6 +77,7 @@ class TypingEngine(threading.Thread):
                 return
             self.emit("countdown", sec)
             time.sleep(1)
+            self._wait_if_paused(0, len(self.text))
         if self.stop_event.is_set():
             self.emit("stopped", "Cancelled")
             return
@@ -81,12 +89,26 @@ class TypingEngine(threading.Thread):
         else:
             self._run_flat()
 
+    def _wait_if_paused(self, i, total):
+        """Sleep while paused; report it once, and report the resume."""
+        if not self.pause_event.is_set():
+            return
+        self.emit("paused", (i, total))
+        while self.pause_event.is_set() and not self.stop_event.is_set():
+            time.sleep(0.1)
+        if not self.stop_event.is_set():
+            self.emit("resumed", None)
+
     def _handle_typo(self, ch, wrong, notice_delay):
-        """Type a wrong char; maybe backspace it. Returns True if corrected."""
+        """Type a wrong char, notice it, backspace, then it gets fixed."""
         self.kb.type(wrong)
         time.sleep(notice_delay)
         if random.random() < self.correct_chance:
-            self.kb.tap(keyboard.Key.backspace)
+            # press-release with a short hold — more reliable across apps
+            # than an instant tap, and how humans actually hit backspace
+            self.kb.press(keyboard.Key.backspace)
+            time.sleep(random.uniform(0.03, 0.09))
+            self.kb.release(keyboard.Key.backspace)
             time.sleep(base_delay(self.wpm) * random.uniform(0.5, 1.2))
             self.fixes += 1
             return True
@@ -102,6 +124,7 @@ class TypingEngine(threading.Thread):
             if self.stop_event.is_set():
                 self.emit("stopped", f"Stopped at {i}/{total}")
                 return
+            self._wait_if_paused(i, total)
             d = hm.delay(ch, prev)
             if ch != "\n" and random.random() < hm.typo_prob():
                 wrong = make_typo(ch)
@@ -134,6 +157,7 @@ class TypingEngine(threading.Thread):
             if self.stop_event.is_set():
                 self.emit("stopped", f"Stopped at {i}/{total}")
                 return
+            self._wait_if_paused(i, total)
             if random.random() < 0.02:
                 wobble = self.wpm * random.uniform(0.85, 1.2)
             if ch != "\n" and random.random() < self.typo_rate:
@@ -219,7 +243,7 @@ class AutoTyperGUI:
 
         self.wpm = self._slider(s, 0, "⌨️ Speed", 20, 120, 55, " WPM")
         self.typo = self._slider(s, 1, "🤥 Typo rate", 0, 50, 12, "‰", div=10)
-        self.fix = self._slider(s, 2, "✅ Auto-fix typos", 0, 100, 75, "%")
+        self.fix = self._slider(s, 2, "✅ Auto-fix typos", 0, 100, 100, "%")
         self.delay = self._slider(s, 3, "⏱ Start delay", 1, 8, 3, " s")
 
         # ---- human mode toggle ----
@@ -244,6 +268,11 @@ class AutoTyperGUI:
                                   activebackground="#ff9aa8", relief="flat",
                                   padx=18, pady=9, cursor="hand2", state="disabled")
         self.stop_btn.pack(side="left", padx=10)
+        self.pause_btn = tk.Button(btns, text="⏸  Pause  (F10)", font=FONT_UI_B,
+                                   command=self.toggle_pause, bg=ACCENT, fg="#101010",
+                                   activebackground="#9ec1ff", relief="flat",
+                                   padx=18, pady=9, cursor="hand2", state="disabled")
+        self.pause_btn.pack(side="left")
 
         # ---- progress ----
         self.bar = ttk.Progressbar(self.root, length=400, mode="determinate")
@@ -321,10 +350,22 @@ class AutoTyperGUI:
         self.engine.start()
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.pause_btn.configure(state="normal", text="⏸  Pause  (F10)")
 
     def stop_typing(self):
         if self.engine:
             self.engine.stop()
+
+    def toggle_pause(self):
+        eng = self.engine
+        if not eng or not eng.is_alive():
+            return
+        if eng.pause_event.is_set():
+            eng.resume()
+            self.pause_btn.configure(text="⏸  Pause  (F10)")
+        else:
+            eng.pause()
+            self.pause_btn.configure(text="▶  Resume  (F10)")
 
     # ---------------------------------------------------- background glue ---
     def _poll_events(self):
@@ -350,6 +391,12 @@ class AutoTyperGUI:
                     self._set_status("✔ " + payload, GREEN)
                 elif kind == "stopped":
                     self._set_status("⏹ " + payload, RED)
+                elif kind == "paused":
+                    i, total = payload
+                    self._set_status(f"⏸ Paused at {i}/{total} — press Resume "
+                                     "(or F10) to continue", ACCENT)
+                elif kind == "resumed":
+                    self._set_status("Typing…", GREEN)
         except queue.Empty:
             pass
         finally:
@@ -357,6 +404,7 @@ class AutoTyperGUI:
                (self.events.qsize() == 0):
                 self.start_btn.configure(state="normal")
                 self.stop_btn.configure(state="disabled")
+                self.pause_btn.configure(state="disabled", text="⏸  Pause  (F10)")
             self.root.after(100, self._poll_events)
 
     def _set_status(self, msg, color=DIM):
@@ -369,6 +417,8 @@ class AutoTyperGUI:
                 self.root.after(0, self.start_typing)
             elif key == keyboard.Key.esc:
                 self.root.after(0, self.stop_typing)
+            elif key == keyboard.Key.f10:
+                self.root.after(0, self.toggle_pause)
 
         self.listener = keyboard.Listener(on_press=on_press)
         self.listener.daemon = True

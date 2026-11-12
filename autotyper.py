@@ -13,6 +13,7 @@ Usage:
 Hotkeys (global, work while another app is focused):
     F8   -> start typing the loaded text
     F9   -> reload text from the clipboard
+    F10  -> pause / resume typing
     Esc  -> stop typing immediately (emergency brake)
 
 macOS: the first run will ask for Accessibility + Input Monitoring
@@ -35,10 +36,11 @@ from human_mode import HumanMode
 DEFAULT_WPM = 55          # average typing speed
 JITTER = 0.55             # how much per-key delay randomly varies (0..1)
 TYPO_RATE = 0.012         # chance each character is mistyped (~1 per 80 chars)
-TYPO_CORRECT_CHANCE = 0.75  # chance a typo is noticed and backspaced away
+TYPO_CORRECT_CHANCE = 1.0   # every typo gets noticed: backspace + retype
 TYPED_START_DELAY = 2.0   # countdown after pressing F8 (gives you time to click into the site)
 START_HOTKEY = keyboard.Key.f8
 RELOAD_HOTKEY = keyboard.Key.f9
+PAUSE_HOTKEY = keyboard.Key.f10
 STOP_KEY = keyboard.Key.esc
 # ---------------------------------------------------------------------------
 
@@ -105,6 +107,7 @@ class AutoTyper:
         self.human_mode = True   # variable human-like timing by default
         self.text = ''
         self.stop_flag = threading.Event()
+        self.pause_flag = threading.Event()
         self.typing = threading.Event()
 
     # ---- text loading -----------------------------------------------------
@@ -152,6 +155,8 @@ class AutoTyper:
             if self.stop_flag.is_set():
                 print(f'\nStopped by Esc at character {i}/{len(self.text)}.')
                 return
+            while self.pause_flag.is_set() and not self.stop_flag.is_set():
+                time.sleep(0.1)
 
             if hm is not None:
                 # ---- human mode: variable speed, bursts, clustered typos ----
@@ -164,7 +169,9 @@ class AutoTyper:
                         self.kb.type(wrong)
                         time.sleep(d * random.uniform(1.5, 3.0))
                         if random.random() < TYPO_CORRECT_CHANCE:
-                            self.kb.tap(keyboard.Key.backspace)
+                            self.kb.press(keyboard.Key.backspace)
+                            time.sleep(random.uniform(0.03, 0.09))
+                            self.kb.release(keyboard.Key.backspace)
                             time.sleep(base_delay(self.wpm) * random.uniform(0.5, 1.2))
                             fixes += 1
                         else:
@@ -189,7 +196,9 @@ class AutoTyper:
                     self.kb.type(wrong)
                     time.sleep(human_delay(wobble_wpm, JITTER, ch, prev) * random.uniform(1.5, 3.0))
                     if random.random() < TYPO_CORRECT_CHANCE:
-                        self.kb.tap(keyboard.Key.backspace)
+                        self.kb.press(keyboard.Key.backspace)
+                        time.sleep(random.uniform(0.03, 0.09))
+                        self.kb.release(keyboard.Key.backspace)
                         time.sleep(base_delay(wobble_wpm) * random.uniform(0.5, 1.2))
                         fixes += 1
                     else:
@@ -209,6 +218,13 @@ class AutoTyper:
     def on_press(self, key) -> None:
         if key == STOP_KEY and self.typing.is_set():
             self.stop_flag.set()
+        elif key == PAUSE_HOTKEY and self.typing.is_set():
+            if self.pause_flag.is_set():
+                print(' — resumed.', flush=True)
+                self.pause_flag.clear()
+            else:
+                print('\nPaused — press F10 to resume, Esc to stop.', flush=True)
+                self.pause_flag.set()
         elif key == START_HOTKEY and not self.typing.is_set():
             if not self.text:
                 print('No text loaded. Copy something and press F9.')

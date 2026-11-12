@@ -42,7 +42,11 @@ variability rides on top of a truthful average.
 - 📋 **Clipboard-driven** — copy anywhere, type anywhere
 - 🧬 **Human mode** — full variable-timing simulation, on by default
 - 🎚️ **Tunable** — speed (WPM), typo rate, auto-fix percentage, start delay
-- 🌍 **Global hotkeys** — `F8` start, `Esc` emergency stop, work from any app
+- 🌍 **Global hotkeys** — `F8` start, `F10` pause/resume, `Esc` emergency stop,
+  all work from any app
+- ⏸️ **Pause & resume** — freeze mid-text, continue exactly where it stopped
+- 🔁 **Real self-correction** — typo → pause → backspace → correct key,
+  every time (verified on real keystrokes)
 - 🖥️ **Clean dark GUI** — paste box, live progress bar, real-time WPM readout
 - 💻 **CLI too** — headless mode for scripting: `python3 autotyper.py --wpm 65`
 - 🚦 **Safe** — instant stop, tabs converted to spaces so focus never jumps
@@ -72,6 +76,10 @@ needed, on Linux install `python3-tk` and an X server.
 4. **Esc** stops instantly, **F9** reloads from the clipboard (CLI)
 
 In the GUI: paste into the box, tune the sliders, hit **▶ Start Typing**.
+**⏸ Pause** (or `F10`) freezes it mid-text; **▶ Resume** continues exactly
+where it stopped. Typos are always self-corrected — wrong key, short pause,
+backspace, correct key — like a person who notices and fixes their mistakes
+(lower the *Auto-fix* slider if you want a few to slip through).
 
 ## Project layout
 
