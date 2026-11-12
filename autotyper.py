@@ -8,7 +8,13 @@ Usage:
     python3 autotyper.py            # type whatever is on the clipboard
     python3 autotyper.py file.py    # type the contents of a file
     python3 autotyper.py --wpm 70   # tune speed
+    python3 autotyper.py --spy      # full-variation mode (see below)
     pbpaste | python3 autotyper.py -   # type from stdin
+
+--spy: every run gets a fresh random persona (speed, accuracy, habits),
+fatigue arcs, word rhythm and — the part no macro has — real breaks:
+irregular micro-pauses and occasional longer distractions, always taken
+at natural seams (end of a word / line / sentence).
 
 Hotkeys (global, work while another app is focused):
     F8   -> start typing the loaded text
@@ -31,6 +37,7 @@ from pynput import keyboard
 from pynput.keyboard import Controller, KeyCode
 
 from human_mode import HumanMode
+from spy_mode import SpyMode
 
 # ---------------------------------------------------------------- config ---
 DEFAULT_WPM = 55          # average typing speed
@@ -105,6 +112,7 @@ class AutoTyper:
         self.kb = Controller()
         self.wpm = wpm
         self.human_mode = True   # variable human-like timing by default
+        self.spy_mode = False    # full-variation mode (--spy)
         self.text = ''
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()
@@ -145,7 +153,12 @@ class AutoTyper:
             print('Cancelled.')
             return
 
-        hm = HumanMode(self.wpm, TYPO_RATE) if human else None
+        if self.spy_mode:
+            hm = SpyMode(self.wpm, TYPO_RATE)
+        elif human:
+            hm = HumanMode(self.wpm, TYPO_RATE)
+        else:
+            hm = None
         wobble_wpm = self.wpm
         prev = ''
         typed = 0
@@ -159,7 +172,16 @@ class AutoTyper:
                 time.sleep(0.1)
 
             if hm is not None:
-                # ---- human mode: variable speed, bursts, clustered typos ----
+                # ---- human/spy mode: variable speed, breaks, typos ----
+                if self.spy_mode:
+                    brk = hm.check_break(ch, prev)
+                    if brk > 0:
+                        print(f'  · break {brk:.1f}s (spy mode)', flush=True)
+                        self._sleep_break(brk)
+                        if self.stop_flag.is_set():
+                            print(f'\nStopped by Esc at character '
+                                  f'{i}/{len(self.text)}.')
+                            return
                 d = hm.delay(ch, prev)
                 if ch != '\n' and random.random() < hm.typo_prob():
                     wrong = make_typo(ch)
@@ -181,6 +203,17 @@ class AutoTyper:
                 self.kb.type(ch)
                 typed += 1
                 prev = ch
+                if self.spy_mode and TYPO_RATE > 0 and \
+                        random.random() < 0.011:
+                    # double-space slip, noticed and immediately corrected
+                    typos += 1
+                    self.kb.type(' ')
+                    time.sleep(random.uniform(0.12, 0.4))
+                    self.kb.press(keyboard.Key.backspace)
+                    time.sleep(random.uniform(0.03, 0.09))
+                    self.kb.release(keyboard.Key.backspace)
+                    fixes += 1
+                    time.sleep(random.uniform(0.08, 0.3))
                 time.sleep(d)
                 continue
 
@@ -212,7 +245,21 @@ class AutoTyper:
             prev = ch
             time.sleep(human_delay(wobble_wpm, JITTER, ch, prev))
 
-        print(f'Done — typed {typed} characters, {typos} typos ({fixes} fixed).')
+        print(f'Done — typed {typed} characters, {typos} typos '
+              f'({fixes} fixed)'
+              + (', spy mode' if self.spy_mode else '') + '.')
+
+    def _sleep_break(self, dur: float) -> None:
+        """A spy-mode break that still honors Esc and the pause key."""
+        end = time.monotonic() + dur
+        while not self.stop_flag.is_set():
+            if self.pause_flag.is_set():
+                time.sleep(0.1)
+                continue
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.15, remaining))
 
     # ---- hotkey handling ------------------------------------------------------
     def on_press(self, key) -> None:
@@ -243,11 +290,13 @@ class AutoTyper:
             self.typing.clear()
 
     def run(self) -> None:
+        mode = ("spy (full variation)" if self.spy_mode else
+                "human (variable)" if self.human_mode else "flat")
         print(__doc__.split('Usage:')[0])
         print(f'Hotkeys: F8 = type clipboard  |  F9 = reload clipboard  '
               f'|  Esc = stop\nSpeed: ~{self.wpm:.0f} WPM, typos ~{TYPO_RATE*100:.1f}% '
               f'({TYPO_CORRECT_CHANCE*100:.0f}% self-corrected)\n'
-              f'Mode: {"human (variable)" if self.human_mode else "flat"}\n'
+              f'Mode: {mode}\n'
               'Waiting for F8... (Ctrl+C in this terminal to quit)\n')
         with keyboard.Listener(on_press=self.on_press) as listener:
             listener.join()
@@ -260,6 +309,9 @@ def main() -> None:
     ap.add_argument('--wpm', type=float, default=DEFAULT_WPM, help='base speed (default 55)')
     ap.add_argument('--flat', action='store_true',
                     help='old constant-speed mode instead of human mode')
+    ap.add_argument('--spy', action='store_true',
+                    help='full-variation mode: fresh persona every run, '
+                         'fatigue, word rhythm and irregular breaks')
     args = ap.parse_args()
 
     typer = AutoTyper(args.wpm)
@@ -271,6 +323,7 @@ def main() -> None:
     else:
         typer.load_clipboard()
     typer.human_mode = not args.flat
+    typer.spy_mode = args.spy
     typer.run()
 
 

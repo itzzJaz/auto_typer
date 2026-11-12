@@ -34,6 +34,26 @@ behavioral model of typing (`human_mode.py`):
 | **Composure** | after a typo, typing slows briefly, then recovers |
 | **Believable typos** | wrong keys are always *neighboring* keys on QWERTY, never random characters |
 
+### 🕒 Spy mode — full variation
+
+Spy mode (`human_mode.py` + `spy_mode.py`) goes a layer higher and models the
+whole *session*, so no two runs look alike:
+
+| Layer | What it randomizes |
+|---|---|
+| **Fresh persona** | every run draws new base speed (±10 %), accuracy (±40 %), a personal spacebar habit and Shift style |
+| **Fatigue arc** | pace warms up, sags over the minutes, gets a random "second wind", sags again |
+| **Word rhythm** | familiar words come out in bursts, unfamiliar ones are typed carefully; common digraphs (th, he, in…) and double letters run fast |
+| **Real breaks** | every 40–100 s of *typing time*, at natural seams only (end of a word / line / sentence): usually 1.5–5 s, sometimes 7–16 s ("checked the phone"), rarely 18–40 s — then the first few characters come out slower, like re-orienting |
+| **Slips** | the occasional doubled space, noticed and corrected with backspace |
+
+Breaks are honest pauses: the WPM slider stays truthful *including* break
+time, micro-breaks are announced in the status line, and nothing repeats —
+no fixed cycles, ever. Starting Spy mode plays a short black-and-red
+radar-sweep animation (click to skip, Esc to cancel; with macOS *Reduce
+Motion* it degrades to a calm static card), and the UI switches to the
+matching **Spy** theme.
+
 The speed slider is calibrated so 55 WPM really averages 55 WPM — the
 variability rides on top of a truthful average.
 
@@ -41,10 +61,14 @@ variability rides on top of a truthful average.
 
 - 🎨 **Apple-style UI** — pill buttons, switches, segmented controls and a
   live progress ring
-- 🌈 **8 themes** — Light, Dark, Midnight, Dracula, Ocean, Sakura, plus two
-  fun ones: **Matrix** (phosphor-green terminal, `auto_typer` wordmark) and
-  **Retro CRT** (amber 80s monitor). Switch from the Light/Dark toggle or
-  the gallery in **⚙ Settings** — applied instantly, remembered forever
+- 🌈 **9 themes** — Light, Dark, Midnight, Dracula, Ocean, Sakura, plus three
+  fun ones: **Matrix** (phosphor-green terminal, `auto_typer` wordmark),
+  **Retro CRT** (amber 80s monitor) and **Spy** (black & red). Switch from
+  the Light/Dark toggle or the gallery in **⚙ Settings** — applied
+  instantly, remembered forever
+- 🕶️ **Spy mode** — full variation: a fresh persona every run, fatigue
+  arcs, word rhythm, irregular real breaks, and a radar-sweep start
+  animation (see above)
 - ⚙️ **Settings panel** — theme gallery with live previews, **remappable
   hotkeys** (click a chip → press a key; conflicts caught, defaults
   restorable) and sound effects
@@ -67,13 +91,15 @@ variability rides on top of a truthful average.
 - 📋 **Clipboard-driven** — copy anywhere, type anywhere; `⌘⏎` starts
   typing straight from the text box
 - 🧬 **Human mode** — full variable-timing simulation, on by default
+- 🕶️ **Spy mode** — the same, plus a randomized session layer and breaks
 - 🎚️ **Tunable** — speed (WPM), typo rate, auto-fix percentage, start delay,
   repeat count
 - 🌍 **Global hotkeys** — `F8` start, `F10` pause/resume, `Esc` emergency
   stop by default, all work from any app, all remappable
 - 🔁 **Real self-correction** — typo → pause → backspace → correct key,
   every time (verified on real keystrokes)
-- 💻 **CLI too** — headless mode for scripting: `python3 autotyper.py --wpm 65`
+- 💻 **CLI too** — headless mode for scripting: `python3 autotyper.py --wpm 65`,
+  `--spy` for the full-variation mode
 - 🚦 **Safe** — instant stop, tabs converted to spaces so focus never jumps,
   crash-safe atomic saves
 
@@ -130,8 +156,9 @@ theme, hotkeys, sliders and window size).
 auto_typer/
 ├── autotyper_gui.py   # Apple-style Tkinter GUI + typing engine
 ├── persistence.py     # session save/resume, snippets, lifetime stats
-├── autotyper.py       # CLI version (hotkeys: F8 / F9 / Esc)
+├── autotyper.py       # CLI version (hotkeys: F8 / F9 / Esc, --spy)
 ├── human_mode.py      # the behavioral typing model (drift, phases, typos)
+├── spy_mode.py        # the session layer (persona, fatigue, rhythm, breaks)
 ├── AutoTyper.command  # double-click launcher for macOS
 ├── requirements.txt
 └── README.md
@@ -140,8 +167,10 @@ auto_typer/
 ## Honest note
 
 AutoTyper exists to save your hands from re-typing your own code where paste
-is blocked. Don't use it to cheat on exams or assessments — the point is
-comfort, not fraud.
+is blocked. Don't use it to cheat on exams or assessments — and Spy mode,
+however it dresses up, doesn't change that: it makes typing *look* human,
+it isn't a license to beat proctoring, anti-cheat or any detection system.
+The point is comfort, not fraud.
 
 ---
 

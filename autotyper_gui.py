@@ -7,6 +7,13 @@ website, press Start (or F8 anywhere). It types everything like a person:
 variable speed, bursts, hesitation, and believable neighbor-key typos —
 some of which it "notices" and fixes with backspace.
 
+What's new in 2.1:
+    · 🕶 Spy mode — full variation: a fresh random persona every run,
+      fatigue arcs, word rhythm, digraph speed-ups, double-space slips
+      and real irregular breaks (micro-pauses, occasional long
+      distractions). Comes with a black & red "Spy" theme and a
+      radar-sweep start animation (click to skip, Esc to cancel)
+
 What's new in 2.0:
     · 8 hand-tuned themes — Light, Dark, Midnight, Dracula, Ocean, Sakura,
       plus two fun ones: Matrix (phosphor-green terminal) and Retro CRT
@@ -27,6 +34,7 @@ in ⚙ Settings):
     Esc -> stop typing immediately (progress is kept, not lost)
 """
 
+import math
 import queue
 import random
 import re
@@ -42,6 +50,7 @@ from pynput.keyboard import Controller
 
 from autotyper import human_delay, base_delay, make_typo
 from human_mode import HumanMode
+from spy_mode import SpyMode
 import persistence
 
 # ==================================================================== theme
@@ -119,6 +128,18 @@ THEMES = {
         "red": "#ff5c33", "orange": "#ff8c00",
         "select": "#4a3a12", "trough": "#3d3115",
         "seg_bg": "#2b2213",
+    },
+    "spy": {
+        "label": "Spy", "dark": True,
+        "title": "auto_typer", "badge": "SPY", "mono": True,
+        "bg": "#0a0a0d", "card": "#141418", "inset": "#101014",
+        "fg": "#f4f4f6", "dim": "#8f8f98", "sep": "#2a2a31",
+        "field": "#0e0e12", "field_border": "#2c2c34",
+        "accent": "#ff2436", "accent_soft": "#38121a",
+        "green": "#e0263a", "green_dark": "#b81e2f",
+        "red": "#ff8080", "orange": "#ffb35c",
+        "select": "#4a141c", "trough": "#26262d",
+        "seg_bg": "#1c1c21",
     },
     "ocean": {
         "label": "Ocean", "dark": True,
@@ -215,6 +236,22 @@ def mix(c1, c2, t):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _clamp01(x):
+    return max(0.0, min(1.0, x))
+
+
+def _ease_out(x):
+    """Fast start, gentle landing (Apple-style deceleration)."""
+    x = _clamp01(x)
+    return 1.0 - (1.0 - x) ** 3
+
+
+def _ease_io(x):
+    """Smoothstep — symmetric ease-in-out for reversible sweeps."""
+    x = _clamp01(x)
+    return x * x * (3.0 - 2.0 * x)
+
+
 # fonts are initialised once a root window exists
 UI = UI_B = UI_T = UI_SM = UI_XS = MONO = None
 
@@ -298,6 +335,11 @@ class PillButton(tk.Canvas):
                            height=self._pad * 2 + 6)
         except tk.TclError:
             return
+        self._draw()
+
+    def set_colors(self, bg, fg="#ffffff"):
+        """Recolor the pill in place (e.g. red while Spy mode is on)."""
+        self._bg, self._fg = bg, fg
         self._draw()
 
     def _set_halo(self, on):
@@ -486,7 +528,7 @@ class TypingEngine(threading.Thread):
     """Types self.text with human behavior, reporting progress to a queue."""
 
     def __init__(self, text, wpm, typo_rate, correct_chance, start_delay,
-                 events, human=True, start_index=0, repeat=1):
+                 events, human=True, start_index=0, repeat=1, spy=False):
         super().__init__(daemon=True)
         self.text = text
         self.wpm = wpm
@@ -495,6 +537,7 @@ class TypingEngine(threading.Thread):
         self.start_delay = start_delay
         self.events = events          # queue of (kind, payload)
         self.human = human            # variable mode
+        self.spy = spy                # full-variation mode (implies human)
         self.start_index = max(0, min(int(start_index), len(text)))
         self.repeat = max(1, int(repeat))   # how many times to type the text
         self.kb = Controller()
@@ -527,7 +570,7 @@ class TypingEngine(threading.Thread):
         self.emit("countdown", 0)
         self.typos = 0
         self.fixes = 0
-        if self.human:
+        if self.human or self.spy:
             self._run_variable()
         else:
             self._run_flat()
@@ -541,6 +584,16 @@ class TypingEngine(threading.Thread):
             time.sleep(0.1)
         if not self.stop_event.is_set():
             self.emit("resumed", None)
+
+    def _sleep_interruptible(self, seconds, i, total, rep):
+        """Sleep 'away' (a spy break), honoring pause and stop the whole time."""
+        end = time.monotonic() + max(0.0, seconds)
+        while not self.stop_event.is_set():
+            self._wait_if_paused(i, total, rep)
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
 
     def _handle_typo(self, ch, wrong, notice_delay):
         """Type a wrong char, notice it, backspace, then it gets fixed."""
@@ -558,8 +611,16 @@ class TypingEngine(threading.Thread):
         return False
 
     def _run_variable(self):
-        """Human mode — drifting speed, bursts, pauses, clustered typos."""
-        hm = HumanMode(self.wpm, self.typo_rate)
+        """Human mode — drifting speed, bursts, pauses, clustered typos.
+
+        With spy=True it goes further: a fresh persona every run, a
+        fatigue arc, word rhythm, irregular real breaks at natural
+        seams, and corrected double-space slips. Nothing is on a cycle.
+        """
+        if self.spy:
+            hm = SpyMode(self.wpm, self.typo_rate)
+        else:
+            hm = HumanMode(self.wpm, self.typo_rate)
         total = len(self.text)
         typed = 0
         for rep in range(1, self.repeat + 1):
@@ -575,6 +636,16 @@ class TypingEngine(threading.Thread):
                     return
                 self._wait_if_paused(i, total, rep)
                 ch = self.text[i]
+                if self.spy:
+                    # breaks fire at natural seams, before the next char
+                    brk = hm.check_break(ch, prev)
+                    if brk > 0:
+                        self.emit("break", round(brk, 1))
+                        self._sleep_interruptible(brk, i, total, rep)
+                        if self.stop_event.is_set():
+                            self.emit("stopped", f"Stopped at {i}/{total}")
+                            return
+                        self.emit("break_done", None)
                 d = hm.delay(ch, prev)
                 if ch != "\n" and random.random() < hm.typo_prob():
                     wrong = make_typo(ch)
@@ -595,17 +666,30 @@ class TypingEngine(threading.Thread):
                 self.kb.type(ch)
                 typed += 1
                 prev = ch
+                if self.spy and self.typo_rate > 0 and ch == " " and \
+                        random.random() < 0.011:
+                    # a doubled space, noticed and immediately corrected
+                    self.typos += 1
+                    self.kb.type(" ")
+                    time.sleep(random.uniform(0.12, 0.4))
+                    self.kb.press(keyboard.Key.backspace)
+                    time.sleep(random.uniform(0.03, 0.09))
+                    self.kb.release(keyboard.Key.backspace)
+                    self.fixes += 1
+                    time.sleep(random.uniform(0.08, 0.3))
                 self.emit("progress", (i + 1, total, self.typos, self.fixes,
                                        hm.speed_ratio, rep))
                 time.sleep(d)
             if rep < self.repeat:
                 self.emit("pass_done", (rep, self.repeat))
-                # a small human breather between passes
-                time.sleep(random.uniform(0.8, 1.8))
+                # a human breather between passes — longer in spy mode
+                time.sleep(random.uniform(2.5, 8.0) if self.spy
+                           else random.uniform(0.8, 1.8))
         self.emit("done", {"typed": typed,
                            "msg": f"Done — {typed} chars typed, "
                                   f"{self.typos} typos ({self.fixes} fixed), "
-                                  f"variable mode"})
+                                  + ("spy mode (fully randomized)"
+                                     if self.spy else "variable mode")})
 
     def _run_flat(self):
         """Classic mode — same average speed, only light uniform jitter."""
@@ -705,7 +789,7 @@ class AutoTyperGUI:
 
         self._text_cache = ""          # survives theme rebuilds
         self._settings = dict(wpm=55, typo=1.2, fix=100, delay=3, human=True,
-                              repeat=1)
+                              spy=False, repeat=1)
         saved_st = prefs.get("settings", {})
         if isinstance(saved_st, dict):
             for k, (lo, hi) in (("wpm", (20, 130)), ("typo", (0, 5)),
@@ -716,6 +800,8 @@ class AutoTyperGUI:
                     self._settings[k] = min(hi, max(lo, v))
             if isinstance(saved_st.get("human"), bool):
                 self._settings["human"] = saved_st["human"]
+            if isinstance(saved_st.get("spy"), bool):
+                self._settings["spy"] = saved_st["spy"]
         self._preset_idx = prefs.get("preset", 1)
         if not isinstance(self._preset_idx, int) or \
                 not 0 <= self._preset_idx < len(self.PRESETS):
@@ -726,6 +812,14 @@ class AutoTyperGUI:
         self._hk_chips = {}
         self._swatches = []
         self._capturing = False
+
+        # spy-mode start animation state
+        self._spy_intro_active = False
+        self._spy_intro = None
+        self._spy_intro_done = None
+        self._spy_job = None
+        self._spy_t0 = 0.0
+        self._spy_reduced = False
 
         # prefs write-behind (sliders would spam the disk otherwise)
         self._prefs_dirty = False
@@ -901,6 +995,21 @@ class AutoTyperGUI:
                  font=UI_XS, bg=T["card"], fg=T["dim"], anchor="w"
                  ).pack(anchor="w")
 
+        spy_row = tk.Frame(sc.inner, bg=T["card"])
+        spy_row.pack(fill="x", pady=(10, 0))
+        self._spy_toggle = Toggle(spy_row, on_color=T["accent"],
+                                  command=self._on_spy,
+                                  value=bool(self._settings.get("spy")))
+        self._spy_toggle.pack(side="left")
+        st = tk.Frame(spy_row, bg=T["card"])
+        st.pack(side="left", padx=(10, 0))
+        tk.Label(st, text="Spy mode", font=UI_SM, bg=T["card"], fg=T["fg"],
+                 anchor="w").pack(anchor="w")
+        tk.Label(st, text="Everything randomized: fresh persona every run, "
+                          "fatigue, rhythm, irregular breaks",
+                 font=UI_XS, bg=T["card"], fg=T["dim"], anchor="w"
+                 ).pack(anchor="w")
+
         # ---- action buttons ----
         acts = tk.Frame(left, bg=T["bg"])
         acts.pack(fill="x", pady=(14, 0))
@@ -919,6 +1028,7 @@ class AutoTyperGUI:
             font=UI_B, pad=11)
         self.stop_btn.pack(side="left")
         self.stop_btn.set_disabled(True)
+        self._style_start_btn()
 
         # ---- session card (right) ----
         sess = card(side, T, pad=14)
@@ -1093,6 +1203,40 @@ class AutoTyperGUI:
         self._settings["human"] = self._human_toggle.value
         self._prefs_dirty = True
 
+    def _on_spy(self):
+        self._settings["spy"] = bool(self._spy_toggle.value)
+        self._prefs_dirty = True
+        if self._settings["spy"]:
+            if self._theme_name != "spy":
+                # black & red — the theme is part of the mode
+                self._apply_theme("spy")
+                self._set_status("Spy mode on — black/red theme applied. "
+                                 "Every run is randomized fresh.",
+                                 self.T["accent"])
+                return
+            self._style_start_btn()
+            self._set_status("Spy mode on — every run randomized fresh.",
+                             self.T["accent"])
+        else:
+            self._style_start_btn()
+            self._set_status("Spy mode off — standard human mode.",
+                             self.T["dim"])
+
+    def _style_start_btn(self):
+        """The start pill turns red and relabels while Spy mode is on."""
+        try:
+            T = self.T
+            if self._settings.get("spy"):
+                self.start_btn.set_colors(T["accent"], "#ffffff")
+                self.start_btn.set_text(
+                    f"▶  Start Spy Mode   {hk_label(self._hotkeys['start'])}")
+            else:
+                self.start_btn.set_colors(T["green"], "#ffffff")
+                self.start_btn.set_text(
+                    f"▶  Start Typing   {hk_label(self._hotkeys['start'])}")
+        except (AttributeError, tk.TclError):
+            pass
+
     # ------------------------------------------------------------ actions ---
     PLACEHOLDER = ("Paste or type the text to auto-type…\n\n"
                    "⌘⏎ starts typing · ⇄ Shuffle randomizes the words")
@@ -1251,7 +1395,7 @@ class AutoTyperGUI:
         ap.pack(fill="x")
         card_title(ap.inner, T, "Appearance")
         tk.Label(ap.inner,
-                 text="8 themes, applied instantly and remembered.",
+                 text="9 themes, applied instantly and remembered.",
                  font=UI_XS, bg=T["card"], fg=T["dim"], anchor="w"
                  ).pack(fill="x")
         grid = tk.Frame(ap.inner, bg=T["card"])
@@ -1493,11 +1637,21 @@ class AutoTyperGUI:
                 self._settings[k] = st[k]
         self._settings["human"] = st.get("human", True)
         self._human_toggle.set(self._settings["human"])
+        self._settings["spy"] = bool(st.get("spy", False))
+        if hasattr(self, "_spy_toggle"):
+            self._spy_toggle.set(self._settings["spy"])
+        self._style_start_btn()
         self._s_typos = sess.get("stats", {}).get("typos", 0)
         self._s_fixes = sess.get("stats", {}).get("fixes", 0)
         self._counted = sess.get("counted", 0)
-        self._start_engine(resume_from=sess.get("index", 0))
-        self._set_status("Resumed from where you left off.", self.T["accent"])
+        idx = sess.get("index", 0)
+        if self._settings["spy"]:
+            self._set_status("Resuming spy session…", self.T["accent"])
+            self._play_spy_intro(lambda: self._start_engine(resume_from=idx))
+        else:
+            self._start_engine(resume_from=idx)
+            self._set_status("Resumed from where you left off.",
+                             self.T["accent"])
 
     def _discard_session(self):
         persistence.clear_session()
@@ -1506,6 +1660,8 @@ class AutoTyperGUI:
 
     # ---- start / stop / pause ----
     def start_typing(self):
+        if self._spy_intro_active:
+            return                      # the intro is already running
         if self.engine and self.engine.is_alive():
             return
         text = self._get_text()
@@ -1514,6 +1670,14 @@ class AutoTyperGUI:
                              self.T["red"])
             self._play_sound("Basso")
             return
+        if self._settings.get("spy"):
+            if self._settings_win is not None:
+                self._close_settings()
+            self._play_spy_intro(self._begin_session)
+        else:
+            self._begin_session()
+
+    def _begin_session(self):
         self._s_typos = 0
         self._s_fixes = 0
         self._counted = 0
@@ -1540,6 +1704,7 @@ class AutoTyperGUI:
             human=self._settings["human"],
             start_index=resume_from,
             repeat=int(self._settings["repeat"]),
+            spy=bool(self._settings.get("spy")),
         )
         self.engine.start()
         self._persist("running", resume_from)
@@ -1575,8 +1740,7 @@ class AutoTyperGUI:
         """Refresh every button/footer/chip that displays a hotkey."""
         hk = self._hotkeys
         try:
-            self.start_btn.set_text(
-                f"▶  Start Typing   {hk_label(hk['start'])}")
+            self._style_start_btn()
             running = self.engine is not None and self.engine.is_alive()
             paused = running and self.engine.pause_event.is_set()
             self.pause_btn.set_text(
@@ -1664,6 +1828,13 @@ class AutoTyperGUI:
             self._persist("paused", i)
             self._refresh_resume_card()
         elif kind == "resumed":
+            self._set_status("Typing…", self.T["green"])
+        elif kind == "break":
+            self._set_status(
+                f"🕶  Micro-break — {payload:.0f}s. Re-reading, hands off "
+                "the keys…", self.T["accent"])
+            self.donut.set(self._last_pct(), "break")
+        elif kind == "break_done":
             self._set_status("Typing…", self.T["green"])
 
     def _on_progress(self, payload):
@@ -1799,6 +1970,221 @@ class AutoTyperGUI:
         except (AttributeError, tk.TclError):
             pass
 
+    # ------------------------------------------------- spy mode animation ---
+    SPY_BG = "#050506"
+    SPY_RED = "#ff2436"
+    SPY_DIM = "#9a9aa0"
+    SPY_TITLE = "SPY MODE"
+    SPY_SUB = "EVERYTHING RANDOMIZED · IRREGULAR BREAKS · FRESH EVERY RUN"
+    SPY_SCRAMBLE = "!<>-_\\/[]{}=+*^?#01"
+    SPY_TOTAL = 2.6          # seconds; skippable with a click / Return
+
+    def _macos_reduce_motion(self):
+        """Honor the system Reduce Motion setting on macOS."""
+        try:
+            out = subprocess.run(
+                ["defaults", "read", "com.apple.universalaccess",
+                 "reduceMotion"],
+                capture_output=True, text=True, timeout=1.5)
+            return out.stdout.strip() == "1"
+        except Exception:
+            return False
+
+    def _play_spy_intro(self, done):
+        """Black-out overlay: reticle, radar sweep, decoded 'SPY MODE'.
+
+        Interruptible by design — a click skips it, Esc cancels the
+        start entirely, and with Reduce Motion it degrades to a calm
+        static card. `done` runs only when the start should proceed.
+        """
+        if self._spy_intro_active:
+            return
+        self._spy_intro_active = True
+        self._spy_intro_done = done
+        ov = tk.Canvas(self.root, bg=self.SPY_BG, highlightthickness=0, bd=0,
+                       cursor="hand2")
+        ov.place(x=0, y=0, relwidth=1, relheight=1)
+        # Canvas overrides lift() to mean "raise a canvas item" — use the
+        # window-level Tcl command instead to get above every sibling.
+        self.root.tk.call("raise", ov._w)
+        self.root.update_idletasks()
+        self._spy_intro = ov
+        self._spy_reduced = self._macos_reduce_motion()
+        self._spy_t0 = time.monotonic()
+        self._spy_job = None
+        ov.bind("<Button-1>", lambda e: self._end_spy_intro(start=True))
+        self.root.bind_all("<Escape>",
+                           lambda e: self._end_spy_intro(start=False),
+                           add="+")
+        self.root.bind_all("<Return>",
+                           lambda e: self._end_spy_intro(start=True), add="+")
+        self._play_sound("Tink")
+        self._spy_intro_frame()
+
+    def _spy_intro_frame(self):
+        if not self._spy_intro_active:
+            return
+        cv = self._spy_intro
+        try:
+            w = max(cv.winfo_width(), 1)
+            h = max(cv.winfo_height(), 1)
+        except tk.TclError:
+            return
+        if self._spy_reduced:
+            # no sweep, no decode — one calm locked frame, then go
+            self._draw_spy_static(cv, w, h)
+            if time.monotonic() - self._spy_t0 >= 0.9:
+                self._end_spy_intro(start=True)
+                return
+        else:
+            t = time.monotonic() - self._spy_t0
+            self._draw_spy_frame(cv, w, h, t)
+            if t >= self.SPY_TOTAL:
+                self._end_spy_intro(start=True)
+                return
+        self._spy_job = self.root.after(16, self._spy_intro_frame)
+
+    def _draw_spy_static(self, cv, w, h):
+        """Reduced-motion variant: a quiet, steady spy card."""
+        cv.delete("all")
+        RED, BG = self.SPY_RED, self.SPY_BG
+        cx, cy = w / 2, h / 2
+        R = min(w, h) * 0.30
+        cv.create_oval(cx - R, cy - R, cx + R, cy + R, outline=RED, width=2)
+        cv.create_oval(cx - R * 0.72, cy - R * 0.72, cx + R * 0.72,
+                       cy + R * 0.72, outline=mix(BG, RED, 0.5), width=1)
+        fam = MONO.actual("family")
+        cv.create_text(cx, cy - 8, text=self.SPY_TITLE,
+                       font=(fam, 30, "bold"), fill=RED)
+        cv.create_text(cx, cy + 32, text="EVERYTHING RANDOMIZED",
+                       font=(fam, 11), fill=self.SPY_DIM)
+        cv.create_text(cx, h - 40, text="starting…",
+                       font=(fam, 10), fill="#7a7a80")
+
+    def _draw_spy_frame(self, cv, w, h, t):
+        cv.delete("all")
+        RED, BG, DIM = self.SPY_RED, self.SPY_BG, self.SPY_DIM
+        fam = MONO.actual("family")
+        cx, cy = w / 2, h / 2
+        R = min(w, h) * 0.30
+
+        # everything dissolves toward the background at the end
+        q = 1.0 if t < 2.2 else _clamp01(1.0 - (t - 2.2) / 0.4)
+
+        def C(color, k=1.0):
+            return mix(BG, color, _clamp01(k * q))
+
+        # the lock pulse gently contracts the reticle at the end
+        pulse = _ease_out((t - 2.05) / 0.25)
+        r1 = R * (1.0 - 0.05 * pulse)
+        cv.create_oval(cx - r1, cy - r1, cx + r1, cy + r1,
+                       outline=C(RED), width=2)
+
+        g2 = _ease_out((t - 0.15) / 0.5)
+        r2 = R * 0.72 * (0.6 + 0.4 * g2)
+        cv.create_oval(cx - r2, cy - r2, cx + r2, cy + r2,
+                       outline=C(RED, 0.55), width=1)
+
+        # compass ticks fade in around the outer ring
+        gt = _ease_out((t - 0.4) / 0.4)
+        for ang in (0, 90, 180, 270):
+            a = math.radians(ang)
+            x1 = cx + (R + 6) * math.cos(a)
+            y1 = cy - (R + 6) * math.sin(a)
+            x2 = cx + (R + 14) * math.cos(a)
+            y2 = cy - (R + 14) * math.sin(a)
+            cv.create_line(x1, y1, x2, y2, fill=C(RED, 0.8 * gt), width=2)
+
+        # faint crosshair
+        gc = _ease_out((t - 0.3) / 0.6)
+        cv.create_line(0, cy, w, cy, fill=C(RED, 0.10 * gc))
+        cv.create_line(cx, 0, cx, h, fill=C(RED, 0.10 * gc))
+
+        # radar sweep — three stacked slices, bright leading edge
+        if 0.45 <= t <= 2.1:
+            ang = (t - 0.45) * 420.0
+            r = R * 0.98
+            for ext, k in ((30, 0.14), (16, 0.08), (7, 0.04)):
+                cv.create_arc(cx - r, cy - r, cx + r, cy + r,
+                              start=90 - ang - ext, extent=ext,
+                              style="pieslice", fill=C(RED, k), outline="")
+
+        # title decodes character by character out of the noise
+        if t > 0.75:
+            parts = []
+            for i, c in enumerate(self.SPY_TITLE):
+                lt = 0.85 + i * 0.075
+                if t >= lt:
+                    parts.append(c)
+                elif t > lt - 0.35:
+                    parts.append(random.choice(self.SPY_SCRAMBLE))
+                else:
+                    parts.append(" ")
+            cv.create_text(cx, cy - 8, text="".join(parts),
+                           font=(fam, 30, "bold"), fill=C(RED))
+
+        # red underline draws itself once the title has locked
+        uw = _ease_io((t - 1.6) / 0.4)
+        if uw > 0:
+            tw = MONO.measure(self.SPY_TITLE) + 26
+            cv.create_line(cx - tw / 2 * uw, cy + 26, cx + tw / 2 * uw,
+                           cy + 26, fill=C(RED, 0.9), width=2)
+
+        # subline: typewriter with a live caret
+        sub_t0 = 1.5
+        n = int(max(0.0, t - sub_t0) / 0.011)
+        if n > 0:
+            sub = self.SPY_SUB[:min(n, len(self.SPY_SUB))]
+            if n < len(self.SPY_SUB):
+                sub += "▌"
+            cv.create_text(cx, cy + 48, text=sub, font=(fam, 11),
+                           fill=C(DIM, 0.95))
+
+        # one scanline sweep down the window
+        sp = _ease_io((t - 1.75) / 0.4)
+        if sp > 0:
+            y = h * 0.16 + sp * (h * 0.68)
+            for k in range(6):
+                yy = y - k * 5
+                cv.create_rectangle(0, yy - 3, w, yy + 3,
+                                    fill=C(RED, 0.12 * (1 - k / 6)),
+                                    outline="")
+            cv.create_rectangle(0, y - 1, w, y + 1, fill=C(RED), outline="")
+
+        # skip hint, gently pulsing
+        if t > 1.0:
+            a = 0.55 + 0.25 * math.sin(t * 4.0)
+            cv.create_text(cx, h - 40, text="click to skip · esc to cancel",
+                           font=(fam, 10), fill=C("#7a7a80", a))
+
+    def _end_spy_intro(self, start=True):
+        """Tear down the overlay. start=False (Esc) cancels the launch."""
+        if not self._spy_intro_active:
+            return
+        self._spy_intro_active = False
+        if self._spy_job is not None:
+            try:
+                self.root.after_cancel(self._spy_job)
+            except Exception:
+                pass
+            self._spy_job = None
+        for seq in ("<Escape>", "<Return>"):
+            try:
+                self.root.unbind_all(seq)
+            except Exception:
+                pass
+        ov, self._spy_intro = self._spy_intro, None
+        if ov is not None:
+            try:
+                ov.destroy()
+            except tk.TclError:
+                pass
+        cb, self._spy_intro_done = self._spy_intro_done, None
+        if start and cb:
+            cb()
+        elif not start:
+            self._set_status("Spy start cancelled.", self.T["dim"])
+
     # ------------------------------------------------------------ hotkeys ---
     @staticmethod
     def _key_match(key, name):
@@ -1875,6 +2261,8 @@ class AutoTyperGUI:
 
     def _close(self):
         self._capturing = False
+        if self._spy_intro_active:
+            self._end_spy_intro(start=False)
         self._save_prefs_now()
         if self.engine and self.engine.is_alive():
             # quitting mid-type? everything is kept, resumable next launch
